@@ -59,6 +59,14 @@ If OBS is running as Administrator, Windows may block global hotkeys from a non-
 
 The application connects to the OBS WebSocket server you configure. A remembered OBS password is encrypted for the current Windows user. **Copy diagnostics does not include the password.**
 
+## Known issues
+
+- Some games may experience input stutter or compatibility issues while APEIRON OBS Overlay is running.
+- The current beta uses global keyboard and mouse hooks for hotkey detection, which may conflict with some games, input systems, overlays, or anti-cheat software.
+- A compatibility update is planned to reduce unnecessary mouse-hook usage and improve game compatibility.
+
+If you encounter this issue, please report the game name and what you experienced in [GitHub Issues](https://github.com/iamtheapeiron-web/apeiron-obs-overlay/issues/1).
+
 ## Building from source
 
 See [BUILDING.md](BUILDING.md).
