@@ -1,0 +1,354 @@
+diff --git a/launcher/app.manifest b/launcher/app.manifest
+index 454cd61..059f5ce 100644
+--- a/launcher/app.manifest
++++ b/launcher/app.manifest
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+ <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+-  <assemblyIdentity version="0.2.0.4" processorArchitecture="amd64" name="APEIRON.OBSOverlay" type="win32"/>
++  <assemblyIdentity version="0.2.0.5" processorArchitecture="amd64" name="APEIRON.OBSOverlay" type="win32"/>
+   <description>APEIRON OBS Overlay</description>
+   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+     <security><requestedPrivileges><requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security>
+diff --git a/launcher/app.rc b/launcher/app.rc
+index e34f7c5..bf38044 100644
+--- a/launcher/app.rc
++++ b/launcher/app.rc
+@@ -2,8 +2,8 @@
+ 1 24 "app.manifest"
+ 
+ 1 VERSIONINFO
+-FILEVERSION 0,2,0,4
+-PRODUCTVERSION 0,2,0,4
++FILEVERSION 0,2,0,5
++PRODUCTVERSION 0,2,0,5
+ FILEFLAGSMASK 0x3f
+ FILEFLAGS 0x2
+ FILEOS 0x40004
+@@ -16,12 +16,12 @@ BEGIN
+     BEGIN
+       VALUE "CompanyName", "APEIRON\0"
+       VALUE "FileDescription", "APEIRON OBS Overlay\0"
+-      VALUE "FileVersion", "0.2.0.4 (beta1)\0"
++      VALUE "FileVersion", "0.2.0.5 (beta2)\0"
+       VALUE "InternalName", "APEIRON OBS Overlay\0"
+       VALUE "LegalCopyright", "Copyright (c) 2026 APEIRON\0"
+       VALUE "OriginalFilename", "APEIRON OBS Overlay.exe\0"
+       VALUE "ProductName", "APEIRON OBS Overlay\0"
+-      VALUE "ProductVersion", "0.2.0-beta.1\0"
++      VALUE "ProductVersion", "0.2.0-beta.2\0"
+     END
+   END
+   BLOCK "VarFileInfo"
+diff --git a/launcher/common.go b/launcher/common.go
+index d604578..13fb7d4 100644
+--- a/launcher/common.go
++++ b/launcher/common.go
+@@ -9,7 +9,7 @@ import (
+ 	"strconv"
+ )
+ 
+-const buildVersion = "0.2-beta1-build4"
++const buildVersion = "0.2-beta2-build5"
+ 
+ //go:embed payload/*
+ var payload embed.FS
+diff --git a/runtime/overlay.ps1 b/runtime/overlay.ps1
+index 0f2f56e..5427c83 100644
+--- a/runtime/overlay.ps1
++++ b/runtime/overlay.ps1
+@@ -1,4 +1,4 @@
+-﻿# APEIRON OBS Overlay v0.2 beta1, build 4
++﻿# APEIRON OBS Overlay v0.2 beta2, build 5
+ # Windows PowerShell 5.1 / Windows 10-11
+ # No Python or external modules required.
+ 
+@@ -130,16 +130,28 @@ public static class ApeironGlobalInput {
+     [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG msg);
+     [DllImport("user32.dll")] private static extern bool PostThreadMessage(uint id, uint msg, UIntPtr wp, IntPtr lp);
+ 
+-    public static bool Start() {
+-        if (worker != null) return keyboardHook != IntPtr.Zero && mouseHook != IntPtr.Zero;
++    private static bool wantKeyboardHook = false;
++    private static bool wantMouseHook = false;
++
++    public static bool Start(bool enableKeyboardHook, bool enableMouseHook) {
++        Stop();
++        wantKeyboardHook = enableKeyboardHook;
++        wantMouseHook = enableMouseHook;
++        if (!wantKeyboardHook && !wantMouseHook) return true;
+         ready.Reset();
+         worker = new System.Threading.Thread(Pump);
+         worker.IsBackground = true;
+         worker.Start();
+         ready.WaitOne(1500);
+-        return keyboardHook != IntPtr.Zero && mouseHook != IntPtr.Zero;
++        bool ok = (!wantKeyboardHook || keyboardHook != IntPtr.Zero) &&
++                  (!wantMouseHook || mouseHook != IntPtr.Zero);
++        if (!ok) Stop();
++        return ok;
+     }
+ 
++    public static bool KeyboardHookActive() { return keyboardHook != IntPtr.Zero; }
++    public static bool MouseHookActive() { return mouseHook != IntPtr.Zero; }
++
+     private static void Pump() {
+         workerId = GetCurrentThreadId();
+         IntPtr module = IntPtr.Zero;
+@@ -148,8 +160,8 @@ public static class ApeironGlobalInput {
+                 if (p.MainModule != null) module = GetModuleHandle(p.MainModule.ModuleName);
+             }
+         } catch {}
+-        keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardProc, module, 0);
+-        mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, module, 0);
++        if (wantKeyboardHook) keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, keyboardProc, module, 0);
++        if (wantMouseHook) mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, module, 0);
+         ready.Set();
+         try {
+             MSG msg;
+@@ -436,8 +448,8 @@ New-Item -ItemType Directory -Force -Path $baseDir | Out-Null
+ 
+ function Default-Config {
+     [ordered]@{
+-        version = "0.2-beta1"
+-        schemaVersion = 6
++        version = "0.2-beta2"
++        schemaVersion = 7
+         obs = [ordered]@{
+             host = "127.0.0.1"
+             port = 4455
+@@ -473,6 +485,7 @@ function Default-Config {
+         general = [ordered]@{
+             startWithWindows = $false
+             startMinimized = $false
++            compatibilityMode = $false
+             setupCompleted = $false
+         }
+     }
+@@ -1050,7 +1063,7 @@ function Select-RadioByTag($radios,$fallback) {
+ function Open-Url([string]$url) {
+     if ([string]::IsNullOrWhiteSpace($url)) {
+         [Windows.Forms.MessageBox]::Show(
+-            "The APEIRON website link has not been inserted into this beta1 build yet.",
++            "The APEIRON website link has not been inserted into this beta build yet.",
+             "APEIRON OBS Overlay",
+             [Windows.Forms.MessageBoxButtons]::OK,
+             [Windows.Forms.MessageBoxIcon]::Information
+@@ -1061,7 +1074,7 @@ function Open-Url([string]$url) {
+ }
+ 
+ # ---------------- App constants ----------------
+-$appVersion = "0.2 beta1 — build 4"
++$appVersion = "0.2 beta2 — build 5"
+ $iconPath = Join-Path $PSScriptRoot "APEIRON.ico"
+ $aboutImagePath = Join-Path $PSScriptRoot "APEIRON_icon.png"
+ $authorWebsite = "https://apeiron.framer.media/"
+@@ -1069,7 +1082,7 @@ $authorPayPal = "https://www.paypal.com/paypalme/StanislavMed"
+ 
+ # ---------------- Main form ----------------
+ $form = New-Object Windows.Forms.Form
+-$form.Text = "APEIRON OBS Overlay v0.2 beta1 — build 4"
++$form.Text = "APEIRON OBS Overlay v0.2 beta2 — build 5"
+ $form.Font = New-Object Drawing.Font("Segoe UI",9)
+ $form.AutoScaleMode = "Font"
+ $form.Width = 650
+@@ -1301,16 +1314,23 @@ $chkMinimized.Enabled=$chkStartup.Checked
+ $tabGeneral.Controls.Add($chkMinimized)
+ $chkStartup.Add_CheckedChanged({$chkMinimized.Enabled=$chkStartup.Checked})
+ 
+-$tabGeneral.Controls.Add((New-Label "Closing the settings window only hides it. Use the tray icon → Exit to stop the overlay." 20 125 540 50))
++$chkCompatibility=New-Check "Game compatibility mode (no low-level input hooks)" 20 112 390
++$chkCompatibility.Checked=[bool]$cfg.general.compatibilityMode
++$tabGeneral.Controls.Add($chkCompatibility)
++$tabGeneral.Controls.Add((New-Label "Use this if a game stutters or loses FPS while APEIRON is running. Hotkeys are polled instead; very short taps may be less reliable." 40 143 510 48))
++$lblInputMode=New-Label "Input mode: initializing..." 40 190 500 28
++$tabGeneral.Controls.Add($lblInputMode)
++
++$tabGeneral.Controls.Add((New-Label "Closing the settings window only hides it. Use the tray icon → Exit to stop the overlay." 20 225 540 45))
+ 
+-$tabGeneral.Controls.Add((New-Label "Settings:" 20 210 100))
+-$tabGeneral.Controls.Add((New-Label "%LOCALAPPDATA%\APEIRON_OBS_Overlay\settings.json" 20 238 520 30))
+-$btnOpenSettings=New-Button "Open settings folder" 20 285 165
++$tabGeneral.Controls.Add((New-Label "Settings:" 20 290 100))
++$tabGeneral.Controls.Add((New-Label "%LOCALAPPDATA%\APEIRON_OBS_Overlay\settings.json" 20 318 520 30))
++$btnOpenSettings=New-Button "Open settings folder" 20 365 165
+ $tabGeneral.Controls.Add($btnOpenSettings)
+-$btnReset=New-Button "Reset settings" 200 285 135
++$btnReset=New-Button "Reset settings" 200 365 135
+ $tabGeneral.Controls.Add($btnReset)
+ 
+-$tabGeneral.Controls.Add((New-Label "The configuration is per Windows user. The app contains no OBS password, microphone name, or personal hotkeys from another user." 20 350 535 65))
++$tabGeneral.Controls.Add((New-Label "The configuration is per Windows user. The app contains no OBS password, microphone name, or personal hotkeys from another user." 20 430 535 65))
+ 
+ # ---------------- About / Support tab ----------------
+ $picAbout=New-Object Windows.Forms.PictureBox
+@@ -1324,7 +1344,7 @@ $tabAbout.Controls.Add($picAbout)
+ $title=New-Label "APEIRON OBS Overlay" 140 30 410 38
+ $title.Font=New-Object Drawing.Font("Segoe UI",18,[Drawing.FontStyle]::Bold)
+ $tabAbout.Controls.Add($title)
+-$tabAbout.Controls.Add((New-Label "v0.2 beta1 — build 4" 142 72 300 26))
++$tabAbout.Controls.Add((New-Label "v0.2 beta2 — build 5" 142 72 300 26))
+ $tabAbout.Controls.Add((New-Label "A lightweight microphone status overlay and hotkey controller for OBS Studio." 142 105 400 50))
+ $tabAbout.Controls.Add((New-Label "Made by APEIRON" 142 160 250 25))
+ 
+@@ -1374,6 +1394,9 @@ $script:holdActive=$false
+ $script:holdBaseMute=$null
+ $script:baseMute=$null
+ $script:hookStarted=$false
++$script:hookConfigInitialized=$false
++$script:keyboardHookWanted=$false
++$script:mouseHookWanted=$false
+ $script:reallyExit=$false
+ $script:elevationPromptShown=$false
+ $script:lastExternalScreen=[Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+@@ -1420,6 +1443,7 @@ function Copy-Appearance-UI-ToConfig {
+ function Copy-General-UI-ToConfig {
+     $cfg.general.startWithWindows=$chkStartup.Checked
+     $cfg.general.startMinimized=$chkMinimized.Checked
++    $cfg.general.compatibilityMode=$chkCompatibility.Checked
+ }
+ 
+ function Copy-UI-ToConfig {
+@@ -1469,6 +1493,7 @@ function Apply-And-Save {
+         Finish-Placement
+         Copy-UI-ToConfig
+         $cfg.general.setupCompleted=$true
++        Update-InputHooks
+         Update-Autostart
+         Save-Config $cfg
+         Apply-Appearance
+@@ -1685,7 +1710,59 @@ function Restore-PendingHold {
+     } catch { Handle-ObsFailure $_.Exception; return $false }
+ }
+ 
++function Test-MouseVk([int]$vk) {
++    return ($vk -in @(0x01,0x02,0x04,0x05,0x06))
++}
++
++function Get-InputModeText {
++    if ([bool]$cfg.general.compatibilityMode) { return "Polling-only compatibility mode (no low-level hooks)" }
++    if (-not $script:hookStarted -and ($script:keyboardHookWanted -or $script:mouseHookWanted)) { return "Polling fallback (requested hook unavailable)" }
++    $keyboard=[ApeironGlobalInput]::KeyboardHookActive()
++    $mouse=[ApeironGlobalInput]::MouseHookActive()
++    if ($keyboard -and $mouse) { return "Keyboard + mouse hooks" }
++    if ($keyboard) { return "Keyboard hook only" }
++    if ($mouse) { return "Mouse hook only" }
++    return "Polling only (no active hotkey hook required)"
++}
++
++function Update-InputHooks {
++    $wantKeyboard=$false
++    $wantMouse=$false
++    if (-not [bool]$cfg.general.compatibilityMode) {
++        foreach ($entry in @(
++            @([bool]$cfg.toggle.enabled,[int]$cfg.toggle.vk),
++            @([bool]$cfg.hold.enabled,[int]$cfg.hold.vk)
++        )) {
++            if (-not [bool]$entry[0]) { continue }
++            if (Test-MouseVk ([int]$entry[1])) { $wantMouse=$true } else { $wantKeyboard=$true }
++        }
++    }
++
++    $changed=(-not $script:hookConfigInitialized -or $wantKeyboard -ne $script:keyboardHookWanted -or $wantMouse -ne $script:mouseHookWanted -or (-not $script:hookStarted -and ($wantKeyboard -or $wantMouse)))
++    if ($changed) {
++        try { [ApeironGlobalInput]::Stop() } catch {}
++        $script:keyboardHookWanted=$wantKeyboard
++        $script:mouseHookWanted=$wantMouse
++        $script:hookConfigInitialized=$true
++        $script:hookStarted=[ApeironGlobalInput]::Start($wantKeyboard,$wantMouse)
++    }
++
++    if ($null -ne $fastTimer) { $fastTimer.Interval=if([bool]$cfg.general.compatibilityMode){25}else{35} }
++    $mode=Get-InputModeText
++    if ($null -ne $lblInputMode) { $lblInputMode.Text="Input mode: $mode" }
++    if (-not $script:hookStarted) {
++        $lblBottom.Text="Ready — requested hook failed; polling fallback active"
++    } elseif ([bool]$cfg.general.compatibilityMode) {
++        $lblBottom.Text="Ready — compatibility mode (polling only)"
++    } elseif ($wantKeyboard -or $wantMouse) {
++        $lblBottom.Text="Ready — $mode"
++    } else {
++        $lblBottom.Text="Ready — no global hooks needed"
++    }
++}
++
+ function Sync-ControlInput {
++    Update-InputHooks
+     [ApeironGlobalInput]::ClearPresses()
+     $script:toggleWasDown=Vk-IsDown ([int]$cfg.toggle.vk)
+     $script:holdWasDown=Vk-IsDown ([int]$cfg.hold.vk)
+@@ -1819,6 +1896,11 @@ $chkHold.Add_CheckedChanged({
+     Update-ControlEnabledState
+ })
+ 
++$chkCompatibility.Add_CheckedChanged({
++    $cfg.general.compatibilityMode=$chkCompatibility.Checked
++    Sync-ControlInput
++})
++
+ Update-ControlEnabledState
+ 
+ foreach ($b in @($btnMutedColor,$btnUnmutedColor,$btnIconColor)) {
+@@ -1931,7 +2013,8 @@ Windows: $([Environment]::OSVersion.VersionString)
+ PowerShell: $($PSVersionTable.PSVersion)
+ OBS connection: $(if($script:connected){"Connected"}else{"Disconnected"})
+ OBS input: $($cfg.obs.inputName)
+-Global input hook: $(if($script:hookStarted){"OK"}else{"Failed / fallback"})
++Input mode: $(Get-InputModeText)
++Hook configuration status: $(if($script:hookStarted){"OK"}else{"Failed / polling fallback"})
+ Current mic state: $muteText
+ Overlay elevated: $appAdmin
+ OBS elevated: $obsAdmin
+@@ -2064,13 +2147,7 @@ if ($cfg.general.startWithWindows) { Update-Autostart }
+ 
+ if ($cfg.obs.autoConnect) { Poll-OBS }
+ 
+-$script:hookStarted=[ApeironGlobalInput]::Start()
+ Sync-ControlInput
+-if ($script:hookStarted) {
+-    $lblBottom.Text="Ready — global hotkeys active"
+-} else {
+-    $lblBottom.Text="Ready — global hook failed; fallback polling active"
+-}
+ if ($script:configNotice) { $lblBottom.Text=$script:configNotice }
+ 
+ if ($StartupMode -and $cfg.general.startMinimized -and $cfg.general.setupCompleted -and -not $DebugMode -and -not $script:firstRun) {
+diff --git a/tests/test_runtime.ps1 b/tests/test_runtime.ps1
+index f646493..b8bf904 100644
+--- a/tests/test_runtime.ps1
++++ b/tests/test_runtime.ps1
+@@ -186,7 +186,7 @@ try {
+  $stored=Default-Config;$stored.schemaVersion=5;$stored.obs.inputName="Custom mic 名称"
+  $stored.hold.overlayBehavior="Keep visible while held";$stored.toggle.duration=1.7
+  Save-Config $stored;$loaded=Load-Config
+- Assert ($loaded.schemaVersion -eq 6 -and $loaded.obs.inputName -eq "Custom mic 名称" -and $loaded.hold.overlayBehavior -eq "Always show while held" -and $loaded.toggle.duration -eq 1.7) "Current settings preserved and upgraded"
++ Assert ($loaded.schemaVersion -eq 7 -and $loaded.obs.inputName -eq "Custom mic 名称" -and $loaded.hold.overlayBehavior -eq "Always show while held" -and $loaded.toggle.duration -eq 1.7) "Current settings preserved and upgraded"
+  $stored.toggle.duration=100;$stored.appearance.x=-2500;$stored.toggle.vk=$stored.hold.vk
+  Save-Config $stored;$loaded=Load-Config
+  Assert ($loaded.toggle.duration -eq 10 -and $loaded.appearance.x -eq -2500 -and -not $loaded.hold.enabled) "Invalid values clamped; key conflict disabled"
+diff --git a/tests/verify_exe.py b/tests/verify_exe.py
+index bee865d..7adee45 100644
+--- a/tests/verify_exe.py
++++ b/tests/verify_exe.py
+@@ -59,10 +59,10 @@ def main():
+     group = next(value for key,value in resources.items() if key[0] == 14)
+     assert struct.unpack_from("<HHH", group) == (0,1,7)
+     version = next(value for key,value in resources.items() if key[0] == 16)
+-    for value in ("APEIRON OBS Overlay", "0.2.0-beta.1", "0.2.0.4 (beta1)"):
++    for value in ("APEIRON OBS Overlay", "0.2.0-beta.2", "0.2.0.5 (beta2)"):
+         assert value.encode("utf-16le") in version, f"Missing version field {value}"
+     fixed = version.find(struct.pack("<I",0xfeef04bd))
+-    assert fixed >= 0 and struct.unpack_from("<IIII",version,fixed+8) == (2,4,2,4)
++    assert fixed >= 0 and struct.unpack_from("<IIII",version,fixed+8) == (2,5,2,5)
+     manifest = next(value for key,value in resources.items() if key[0] == 24)
+     tree = ET.fromstring(manifest)
+     requested = next(element for element in tree.iter() if element.tag.endswith("requestedExecutionLevel"))
+@@ -76,7 +76,7 @@ def main():
+         if args.extract:
+             args.extract.mkdir(parents=True,exist_ok=True)
+             (args.extract/name).write_bytes(extracted)
+-    print("PASS: Windows x64 GUI PE; NX/ASLR; 7 embedded icons; icon group; version 0.2.0.4; asInvoker manifest; all three embedded runtime files match source byte for byte.")
++    print("PASS: Windows x64 GUI PE; NX/ASLR; 7 embedded icons; icon group; version 0.2.0.5; asInvoker manifest; all three embedded runtime files match source byte for byte.")
+     print("EXE SHA256:",hashlib.sha256(b).hexdigest())
+ 
+ if __name__ == "__main__":
