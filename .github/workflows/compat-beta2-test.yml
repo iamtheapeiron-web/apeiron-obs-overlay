@@ -1,0 +1,83 @@
+name: Beta 2 compatibility test build
+
+on:
+  push:
+    branches: [compat-beta2-test]
+  workflow_dispatch:
+
+jobs:
+  windows-runtime-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply compatibility patch
+        shell: bash
+        run: git apply .github/compat-beta2.patch
+      - name: Parse PowerShell and compile embedded C#
+        shell: powershell
+        run: |
+          $errors=$null
+          $tokens=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'runtime/overlay.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if($errors.Count){ throw ($errors | Out-String) }
+          $text=[IO.File]::ReadAllText((Resolve-Path 'runtime/overlay.ps1'))
+          $native=[regex]::Match($text,'(?s)\$native = @"\r?\n(.*?)\r?\n"@').Groups[1].Value
+          if(-not $native){ throw 'Embedded C# block not found' }
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          Add-Type -TypeDefinition $native -ReferencedAssemblies System.Windows.Forms,System.Drawing
+          Write-Host 'PASS: PowerShell parsed and production C# compiled.'
+      - name: Runtime state-machine tests
+        shell: powershell
+        run: .\tests\test_runtime.ps1
+
+  build:
+    needs: windows-runtime-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Apply compatibility patch
+        run: git apply .github/compat-beta2.patch
+      - name: Install Windows resource compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-mingw-w64-x86-64
+      - name: Input compatibility model
+        run: python tests/test_input_compatibility.py
+      - name: Go tests
+        working-directory: launcher
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build Windows executable
+        run: python build.py --output 'dist/APEIRON OBS Overlay.exe'
+      - name: Verify executable and embedded runtime
+        run: python tests/verify_exe.py 'dist/APEIRON OBS Overlay.exe' runtime
+      - name: Package compatibility test build
+        run: |
+          mkdir -p package
+          cp 'dist/APEIRON OBS Overlay.exe' package/
+          cat > package/TEST_README.txt <<'EOF'
+          APEIRON OBS Overlay v0.2.0-beta.2 compatibility test
+
+          Main compatibility changes:
+          - Keyboard-only hotkeys no longer install a global mouse hook.
+          - Mouse hooks are installed only when an enabled hotkey uses Mouse1-Mouse5.
+          - General -> Game compatibility mode disables all low-level input hooks and uses polling only.
+
+          Suggested test for games with stutter/FPS loss:
+          1. Start with your normal keyboard hotkeys and leave compatibility mode OFF.
+          2. Confirm General shows: Input mode: Keyboard hook only.
+          3. Test the affected game.
+          4. If the problem remains, enable Game compatibility mode and test again.
+          5. Confirm Mute/Unmute and Hold Mode still work in both modes.
+          EOF
+          cd package && zip -9 '../APEIRON-OBS-Overlay-v0.2.0-beta.2-compat-test-win-x64.zip' *
+      - uses: actions/upload-artifact@v4
+        with:
+          name: APEIRON-OBS-Overlay-v0.2.0-beta.2-compat-test-win-x64
+          path: APEIRON-OBS-Overlay-v0.2.0-beta.2-compat-test-win-x64.zip
+          if-no-files-found: error
